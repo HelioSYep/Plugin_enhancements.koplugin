@@ -364,7 +364,7 @@ local function _buildDescStrip(w, pfx, full_desc, bd_title, bd_author, S, scale,
 
     local ok_ss, SUIStyle = SimpleUICompat.tryRequire("style")
     -- Same fg color as the coverdeck title (CLR_TEXT_EFF in module_coverdeck)
-    local CLR_TEXT = (ok_ss and SUIStyle and SUIStyle.getThemeColor("fg"))
+    local CLR_TEXT = (ok_ss and SUIStyle and SimpleUICompat.getThemeColor(SUIStyle, "fg"))
                   or Blitbuffer.COLOR_BLACK
 
     -- Font size: user base (pt) scaled by the same module + label scale that

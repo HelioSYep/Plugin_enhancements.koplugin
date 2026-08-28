@@ -351,10 +351,16 @@ local function installEntryWrapper()
         local cfg = QA.getCustomQAConfig(action_id)
         local active = stateForConfig(cfg)
         if active == nil then return entry end
-        return {
-            icon  = active and pair.icon_on or pair.icon_off,
-            label = entry and entry.label or cfg.label or action_id,
-        }
+        -- Preserve every field SimpleUI attaches to the resolved entry
+        -- (2.6 adds dim/state metadata consumed by the shared QA renderer).
+        -- Only the icon is ours to replace.
+        local resolved = {}
+        for key, value in pairs(type(entry) == "table" and entry or {}) do
+            resolved[key] = value
+        end
+        resolved.icon = active and pair.icon_on or pair.icon_off
+        resolved.label = resolved.label or cfg.label or action_id
+        return resolved
     end
 end
 
@@ -642,7 +648,7 @@ function P.apply()
             or type(qa.execute) ~= "function"
             or type(qa.executeCustomQA) ~= "function"
             or type(qa.showIconPicker) ~= "function" then
-        return false, "当前 SimpleUI 快捷动作 API 不兼容（此测试功能以 2.5.0 为目标）"
+        return false, "当前 SimpleUI 快捷动作 API 不兼容（支持目标：2.5.0 / 2.6.x）"
     end
 
     QA = qa

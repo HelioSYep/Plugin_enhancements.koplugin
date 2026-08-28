@@ -629,11 +629,11 @@ function M.build(w, ctx)
     if SS then
         -- "muted" / "divider" tends to be darker than "surface",
         -- giving a clear visual weight to section headers.
-        CLR_HDR_BG = SS.getThemeColor("muted")
-                     or SS.getThemeColor("divider")
+        CLR_HDR_BG = SimpleUICompat.getThemeColor(SS, "muted")
+                     or SimpleUICompat.getThemeColor(SS, "divider")
                      or CLR_HDR_BG
-        CLR_TEXT   = SS.getThemeColor("fg")         or CLR_TEXT
-        CLR_SEP    = SS.getThemeColor("separator")  or CLR_SEP
+        CLR_TEXT   = SimpleUICompat.getThemeColor(SS, "fg")        or CLR_TEXT
+        CLR_SEP    = SimpleUICompat.getThemeColor(SS, "separator") or CLR_SEP
     end
 
     -- Fonts — side-by-side layout: larger values, compact labels

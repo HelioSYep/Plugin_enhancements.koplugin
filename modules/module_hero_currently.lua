@@ -759,9 +759,9 @@ function M.build(w, ctx)
     local CLR_SUB  = UI.CLR_TEXT_SUB or Blitbuffer.gray(0.45)
     local ok_ss, SUIStyle = SimpleUICompat.tryRequire("style")
     if ok_ss and SUIStyle then
-        CLR_TEXT = SUIStyle.getThemeColor("fg")              or CLR_TEXT
-        CLR_SUB  = SUIStyle.getThemeColor("text_secondary")
-                   or SUIStyle.getThemeColor("fg")           or CLR_SUB
+        CLR_TEXT = SimpleUICompat.getThemeColor(SUIStyle, "fg") or CLR_TEXT
+        CLR_SUB  = SimpleUICompat.getThemeColor(SUIStyle, "text_secondary")
+                   or SimpleUICompat.getThemeColor(SUIStyle, "fg") or CLR_SUB
     end
 
     -- Text column width
@@ -1047,10 +1047,10 @@ function M.build(w, ctx)
     local border_clr = Blitbuffer.gray(0.72)
     local bg_color   = false  -- transparent by default; wallpaper shows through
     if ok_ss and SUIStyle then
-        border_clr = SUIStyle.getThemeColor("separator") or border_clr
+        border_clr = SimpleUICompat.getThemeColor(SUIStyle, "separator") or border_clr
     end
     if solid_bg then
-        bg_color = (ok_ss and SUIStyle and SUIStyle.getThemeColor("bg"))
+        bg_color = (ok_ss and SUIStyle and SimpleUICompat.getThemeColor(SUIStyle, "bg"))
                    or Blitbuffer.COLOR_WHITE
     end
 

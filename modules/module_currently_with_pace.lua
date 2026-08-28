@@ -593,8 +593,8 @@ function M.build(w, ctx)
 
     -- Theme: when fg is set use it for all text; otherwise fall back to module defaults.
     local ok_ss, SUIStyle  = SimpleUICompat.tryRequire("style")
-    local _theme_fg        = ok_ss and SUIStyle and SUIStyle.getThemeColor("fg")
-    local _theme_secondary = ok_ss and SUIStyle and SUIStyle.getThemeColor("text_secondary")
+    local _theme_fg        = ok_ss and SUIStyle and SimpleUICompat.getThemeColor(SUIStyle, "fg")
+    local _theme_secondary = ok_ss and SUIStyle and SimpleUICompat.getThemeColor(SUIStyle, "text_secondary")
     local _CLR_DARK_EFF    = _theme_fg or _CLR_DARK
     local CLR_TEXT_SUB_EFF = _theme_secondary or _theme_fg or CLR_TEXT_SUB
     local CLR_PH_EFF       = _theme_secondary or _theme_fg or CLR_PLACEHOLDER

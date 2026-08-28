@@ -894,25 +894,8 @@ function P.apply()
         return content
     end
 
-    -- ── 10. Screensaver.show() patch ──────────────────────────────────────
-    local _show_patched        = false
-    local _orig_req_for_ss     = _G.require
-
-    local function _patchShow(Screensaver)
-        if _show_patched then return true end
-        if type(Screensaver) ~= "table" then return false end
-        local orig_show = Screensaver.show
-        if type(orig_show) ~= "function" then
-            local mt = type(orig_show) == "table" and getmetatable(orig_show)
-            if not (mt and mt.__call) then
-                logger.warn("screensaver_insights: show not callable — cannot patch")
-                return false
-            end
-        end
-        _show_patched = true
-
-        Screensaver.show = function(self)
-            if self.screensaver_type ~= TYPE_VALUE then return orig_show(self) end
+    -- ── 10. Register this type with the shared Screensaver dispatcher ─────
+    local function _showInsights(self, fallback_show)
             if not self.ui then
                 logger.warn("screensaver_insights: show() aborting — self.ui nil"); return
             end
@@ -990,7 +973,7 @@ function P.apply()
             if not ok_sw2 then
                 logger.err("screensaver_insights: SSWidget:new failed: " .. tostring(sw2))
                 Device.screen_saver_mode = false; Device.orig_rotation_mode = nil
-                return orig_show(self)
+                return fallback_show(self)
             end
             self.screensaver_widget = sw2
             self.screensaver_widget.modal    = true
@@ -999,7 +982,7 @@ function P.apply()
             if not ok_us then
                 logger.err("screensaver_insights: UIManager:show failed: " .. tostring(ue))
                 Device.screen_saver_mode = false; Device.orig_rotation_mode = nil
-                return orig_show(self)
+                return fallback_show(self)
             end
 
             if with_gl then
@@ -1007,52 +990,16 @@ function P.apply()
                 self.screensaver_lock_widget = SSLW:new{ ui=self.ui, orig_dimen=orig_dimen }
                 UIManager:show(self.screensaver_lock_widget)
             end
-        end
-
-        return true
     end
 
-    -- Patch if screensaver already loaded.
-    local cached_ss = package.loaded["ui/screensaver"]
-    if type(cached_ss) == "table" and cached_ss.show ~= nil then
-        _patchShow(cached_ss)
-    end
-
-    -- Intercept future require("ui/screensaver").
-    if not _show_patched then
-        _G.require = function(modname, ...)
-            local result = _orig_req_for_ss(modname, ...)
-            if modname == "ui/screensaver" then
-                if not _show_patched then
-                    if type(result) == "table" then
-                        if _patchShow(result) then
-                            _G.require = _orig_req_for_ss
-                        else
-                            logger.warn("screensaver_insights: require patch of show() failed")
-                        end
-                    end
-                else
-                    _G.require = _orig_req_for_ss
-                end
-            end
-            return result
-        end
-    end
-
-    -- Intercept dofile() to inject menu items and re-check show() patching.
-    -- _patchShow has a _show_patched guard so it never double-wraps, which
-    -- means it is safe to call here even when patch_screensaver_homescreen
-    -- is also active and runs its own re-check.
-    local _orig_dofile = _G.dofile
-    _G.dofile = function(path, ...)
-        local result = _orig_dofile(path, ...)
-        if type(path) == "string" and path:find("screensaver_menu%.lua$") then
-            _injectIntoMenuTable(result)
-            local ss = package.loaded["ui/screensaver"]
-            if ss then _patchShow(ss) end
-        end
-        return result
-    end
+    local Dispatcher = require("utils/screensaver_dispatcher")
+    local ok_register, register_error = Dispatcher.register{
+        id               = P.id,
+        screensaver_type = TYPE_VALUE,
+        show             = _showInsights,
+        inject_menu      = _injectIntoMenuTable,
+    }
+    if not ok_register then error(register_error) end
 end
 
 return P

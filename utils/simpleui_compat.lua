@@ -1,11 +1,29 @@
--- SimpleUI 2.1.1 / 2.5.0 compatibility resolver.
+-- SimpleUI 2.1.1 / 2.5.0 / 2.6.x compatibility resolver.
 --
--- SimpleUI 2.5.0 kept the public module APIs used by this plugin, but moved
--- the implementation into modules/, infra/, screens/, engines/ and features/.
+-- SimpleUI 2.5.0 moved the implementation into modules/, infra/, screens/,
+-- engines/ and features/. 2.6.0 split a few more responsibilities (notably
+-- wallpaper and Quick Action rendering) into their own feature/engine files.
 -- Keep every version-dependent path in this file so modules and patches can
 -- target capabilities instead of hard-coding a SimpleUI release layout.
 
 local M = {}
+
+-- SimpleUI 2.5 exposes user-configurable colours through
+-- SUIStyle.getThemeColor(role). SimpleUI 2.6 removed that API. Return nil on
+-- 2.6 so each extension keeps the exact legacy fallback colours it used
+-- before the compatibility update, while still avoiding a call to the missing
+-- function. Do not map to 2.6's SUIStyle.COLOR here: those semantic tokens use
+-- visibly different gray levels and would alter the extensions' established
+-- appearance.
+function M.getThemeColor(style, role)
+    if type(style) ~= "table" or type(role) ~= "string" then return nil end
+
+    if type(style.getThemeColor) == "function" then
+        local ok, color = pcall(style.getThemeColor, role)
+        if ok and color ~= nil then return color end
+    end
+    return nil
+end
 
 local PATHS = {
     registry       = { "modules/moduleregistry", "desktop_modules/moduleregistry" },
@@ -24,7 +42,10 @@ local PATHS = {
     book_rows      = { "modules/module_book_rows", "desktop_modules/module_book_rows" },
     quicksettings  = { "screens/sui_quicksettings_bar", "sui_quicksettings_bar" },
     quickactions   = { "features/sui_quickactions", "sui_quickactions" },
+    quickactions_renderer = { "engines/sui_quickactions_render" },
     style          = { "features/sui_style", "sui_style" },
+    wallpaper      = { "features/sui_wallpaper", "sui_homescreen" },
+    book_grid      = { "engines/sui_book_grid", "desktop_modules/sui_book_row" },
     streak         = { "infra/sui_streak", "sui_streak" },
     window         = { "engines/sui_window", "sui_window" },
 }
@@ -78,6 +99,64 @@ function M.getLayoutFamily()
     local ok, _, path = M.tryRequire("config")
     if not ok then return nil end
     return path == "infra/sui_config" and "2.5" or "2.1"
+end
+
+-- Read SimpleUI's own _meta.lua without using require("_meta"), which is a
+-- process-global module name shared by every KOReader plugin. The registry's
+-- source path gives us the correct plugin root for every supported layout.
+function M.getVersion()
+    local ok, Registry = M.tryRequire("registry")
+    if ok and Registry then
+        local probe = Registry.register or Registry.list or Registry.get
+        if type(probe) == "function" then
+            local info = debug.getinfo(probe, "S")
+            local source = info and info.source or ""
+            source = source:sub(1, 1) == "@" and source:sub(2) or source
+            source = source:gsub("\\", "/")
+            local root = source:match("^(.*)/modules/moduleregistry%.lua$")
+                or source:match("^(.*)/desktop_modules/moduleregistry%.lua$")
+            if root then
+                local ok_meta, meta = pcall(dofile, root .. "/_meta.lua")
+                if ok_meta and type(meta) == "table"
+                        and type(meta.version) == "string" then
+                    return meta.version
+                end
+            end
+        end
+    end
+    local family = M.getLayoutFamily()
+    return family and (family == "2.5" and "2.5+" or "2.1.x") or nil
+end
+
+-- Refresh every live SimpleUI surface on 2.5+/2.6 (built-in Home plus Custom
+-- Screens), while retaining the single-Homescreen fallback used by 2.1.1.
+function M.refreshAllLiveImmediate(keep_cache)
+    local ok, ScreenEngine = M.tryRequire("screen_engine")
+    if not ok or not ScreenEngine then return false, ScreenEngine end
+    if type(ScreenEngine.refreshAllLiveImmediate) == "function" then
+        return pcall(ScreenEngine.refreshAllLiveImmediate, keep_cache)
+    end
+    if type(ScreenEngine.refreshImmediate) == "function" then
+        return pcall(ScreenEngine.refreshImmediate, keep_cache)
+    end
+    local instance = ScreenEngine._instance
+    if instance and type(instance._refreshImmediate) == "function" then
+        return pcall(instance._refreshImmediate, instance, keep_cache)
+    end
+    return false, "SimpleUI refresh API unavailable"
+end
+
+-- Layout rebuild counterpart to refreshAllLiveImmediate().
+function M.rebuildAllLayouts()
+    local ok, ScreenEngine = M.tryRequire("screen_engine")
+    if not ok or not ScreenEngine then return false, ScreenEngine end
+    if type(ScreenEngine.rebuildAllLayouts) == "function" then
+        return pcall(ScreenEngine.rebuildAllLayouts)
+    end
+    if type(ScreenEngine.rebuildLayout) == "function" then
+        return pcall(ScreenEngine.rebuildLayout)
+    end
+    return false, "SimpleUI layout rebuild API unavailable"
 end
 
 -- Resolve the structured-layout settings key belonging to a module-settings

@@ -15,7 +15,7 @@ local _               = require("gettext")
 local SimpleUICompat  = require("utils/simpleui_compat")
 
 local PLUGIN_ID      = "Plugin_enhancements"
-local PLUGIN_VERSION = "1.0.2"
+local PLUGIN_VERSION = "1.1.4"
 
 -- PluginLoader normally provides self.path, but keeping a source-derived
 -- fallback makes discovery reliable during early menu construction and in
@@ -203,8 +203,9 @@ function PluginEnhancements:_registerComponents()
     local ok_registry, Registry, registry_path = SimpleUICompat.tryRequire("registry")
     if ok_registry and Registry then
         self._registry = Registry
-        self._simpleui_family = registry_path == "modules/moduleregistry"
-            and "2.5.0" or "2.1.1"
+        self._simpleui_family = type(SimpleUICompat.getVersion) == "function"
+            and SimpleUICompat.getVersion()
+            or (registry_path == "modules/moduleregistry" and "2.5+" or "2.1.x")
     else
         self._registry = nil
         self._simpleui_family = "未检测到"
@@ -217,6 +218,18 @@ function PluginEnhancements:_registerComponents()
         error("没有发现组件文件，当前目录：" .. self._plugin_path)
     end
     self:_prewarmBookModuleCaches()
+
+    -- Registry.register() invalidates SimpleUI's registry cache, but a Home
+    -- Screen that was already constructed can still retain its own enabled
+    -- module cache. Rebuild live layouts once after external registration so
+    -- enabled modules appear immediately regardless of plugin load order.
+    if #self._mod_ids > 0 then
+        local ok_rebuild, rebuild_error = SimpleUICompat.rebuildAllLayouts()
+        if not ok_rebuild then
+            logger.dbg(PLUGIN_ID .. ": no live SimpleUI layout to rebuild: "
+                .. tostring(rebuild_error))
+        end
+    end
 end
 
 -- Load every module file for metadata, but register only explicitly enabled
@@ -398,13 +411,11 @@ function PluginEnhancements:onCloseDocument()
     UIManager:scheduleIn(2, function()
         local ok_reader, ReaderUI = pcall(require, "apps/reader/readerui")
         if not ok_reader or (ReaderUI and ReaderUI.instance) then return end
-        local ok_homescreen, Homescreen = SimpleUICompat.tryRequire("homescreen")
-        if not ok_homescreen or not Homescreen or not Homescreen._instance then return end
-        self:_runDeferredStatsRefresh(Homescreen._instance)
+        self:_runDeferredStatsRefresh()
     end)
 end
 
-function PluginEnhancements:_runDeferredStatsRefresh(homescreen_instance)
+function PluginEnhancements:_runDeferredStatsRefresh()
     local ok_config, Config = SimpleUICompat.tryRequire("config")
     if not ok_config or not Config or type(Config.openStatsDB) ~= "function" then return end
     local db_conn = Config.openStatsDB()
@@ -417,10 +428,10 @@ function PluginEnhancements:_runDeferredStatsRefresh(homescreen_instance)
     end
     pcall(function() db_conn:close() end)
 
-    pcall(function()
-        homescreen_instance:_updatePage(false)
-        UIManager:setDirty(homescreen_instance, "ui")
-    end)
+    -- 2.5+/2.6 may have a Custom Screen live instead of the built-in Home
+    -- Screen. The compatibility helper refreshes every live surface there and
+    -- falls back to the sole 2.1.1 Homescreen instance on the legacy layout.
+    SimpleUICompat.refreshAllLiveImmediate(false)
 end
 
 function PluginEnhancements:onClosePlugin()
@@ -651,7 +662,7 @@ function PluginEnhancements:_buildPluginMenu()
                 callback = function()
                     UIManager:show(InfoMessage:new{
                         text = string.format(
-                            "插件增强 v%s\n\n集中管理 KOReader 功能补丁与\nSimpleUI 扩展模块。\n\n兼容 SimpleUI 2.1.1 / 2.5.0\n当前识别：%s\n\n提示：\n更改组件状态后，请完整重启 KOReader。\n\n许可：GNU AGPL v3",
+                            "插件增强 v%s\n\n集中管理 KOReader 功能补丁与\nSimpleUI 扩展模块。\n\n兼容 SimpleUI 2.1.1 / 2.5.0 / 2.6.x\n当前识别：%s\n\n提示：\n更改组件状态后，请完整重启 KOReader。\n\n许可：GNU AGPL v3",
                             PLUGIN_VERSION,
                             self._simpleui_family or "等待初始化"
                         ),

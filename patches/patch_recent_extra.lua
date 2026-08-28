@@ -24,19 +24,15 @@
 --   P.description     string  — help text for menu
 --   P.default_enabled bool    — first-run default (false = opt-in for patches)
 --
--- COMPATIBILITY: SimpleUI's stable release (2.1.1) still ships the old
--- top-level desktop_modules/module_recent.lua. The rewrite described below
--- (module_book_rows.lua's "recent" sub-module) only exists on SimpleUI's
--- unreleased main branch as of this writing. Until SimpleUI cuts a release
--- containing that rewrite, P.apply() below detects which API is present at
--- runtime and wraps whichever one it finds:
+-- COMPATIBILITY: SimpleUI 2.1.1 ships the old top-level
+-- desktop_modules/module_recent.lua. SimpleUI 2.5+/2.6 ships a
+-- modules/module_recent.lua descriptor backed by engines/sui_book_grid.lua;
+-- an intermediate module_book_rows sub-module layout is also recognized.
+-- P.apply() detects the API at runtime and wraps whichever one it finds:
 --
---   api_mode = "sub"  — new sub-module (module_book_rows.lua), tried first
---   api_mode = "flat" — old module_recent.lua, fallback for 2.1.1 and earlier
---
--- TODO: once SimpleUI releases a version containing module_book_rows.lua,
--- drop the "flat" fallback path (and this compatibility note) and require
--- that release as the plugin's minimum SimpleUI version.
+--   api_mode = "grid" — 2.5+/2.6 sui_book_grid descriptor
+--   api_mode = "sub"  — intermediate module_book_rows sub-module
+--   api_mode = "flat" — 2.1.1 legacy module_recent.lua
 --
 -- HOW IT WORKS (api_mode == "sub")
 --   Since the SimpleUI refactor, the Recent Books sub-module is no longer
@@ -300,9 +296,13 @@ function P.apply()
     end
 
     if not target_mod then
-        local ok_mr, MR = SimpleUICompat.tryRequire("recent")
+        local ok_mr, MR, recent_path = SimpleUICompat.tryRequire("recent")
         if ok_mr and MR then
-            target_mod, api_mode = MR, "flat"
+            target_mod = MR
+            -- 2.5+/2.6 module_recent is produced by sui_book_grid and caches
+            -- its source in ctx._row_fps_recent. The 2.1.1 module reads
+            -- ctx.recent_fps directly and has no such cache.
+            api_mode = recent_path == "modules/module_recent" and "grid" or "flat"
         end
     end
 
@@ -342,7 +342,9 @@ function P.apply()
 
         -- Save originals so subsequent re-renders (e.g. the homescreen
         -- refresh loop calling build() again) see the unmodified state.
-        local orig_cache = (api_mode == "sub") and ctx[CACHE_KEY] or ctx.recent_fps
+        local uses_row_cache = api_mode == "sub" or api_mode == "grid"
+        local orig_cache = uses_row_cache and ctx[CACHE_KEY] or nil
+        local orig_recent_fps = ctx.recent_fps
         local orig_focus_idx = ctx.kb_recent_focus_idx
 
         local row_widgets = {}
@@ -363,9 +365,10 @@ function P.apply()
             -- line 152.)
             local slice = {}
             for i = from, to do slice[#slice + 1] = fps[i] end
-            if api_mode == "sub" then
+            if uses_row_cache then
                 ctx[CACHE_KEY] = slice
-            else
+            end
+            if api_mode ~= "sub" then
                 ctx.recent_fps = slice
             end
 
@@ -391,11 +394,10 @@ function P.apply()
         -- from the unmodified source instead of seeing a stale slice. In
         -- Lua, `t.x = nil` and "key absent" are equivalent, so a single
         -- assignment handles both cases.
-        if api_mode == "sub" then
+        if uses_row_cache then
             ctx[CACHE_KEY] = orig_cache
-        else
-            ctx.recent_fps = orig_cache
         end
+        ctx.recent_fps = orig_recent_fps
         ctx.kb_recent_focus_idx = orig_focus_idx
 
         if #row_widgets == 0 then return nil end

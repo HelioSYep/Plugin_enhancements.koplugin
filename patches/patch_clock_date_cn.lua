@@ -1,8 +1,9 @@
 -- patches/patch_clock_date_cn.lua — SimpleUI Extra Modules
 -- Replaces module_clock's _localDate() with a Chinese-format date.
 --
--- Original: "Wednesday, 3 June"
--- CN:       "6月3日 星期三"
+-- Original 2.1/2.5: "Wednesday, 3 June"
+-- Desktop 2.6 CN:    "星期三, 6月3日"
+-- Patched:           "2025年 6月3日 星期三"
 --
 -- IMPLEMENTATION
 -- The patch works by hotfix, it replace function by debug.setupvalue.
@@ -36,29 +37,24 @@ end
 local _applied = false
 
 function P.apply()
-    if _applied then return end
+    if _applied then return true end
     _applied = true
 
     local ok, ClockMod = SimpleUICompat.tryRequire("clock")
     if not ok then
-        logger.warn "simpleui_ext/patch_clock_date_cn: failed to load module_clock"
-        return
+        local reason = "failed to load module_clock"
+        logger.warn("simpleui_ext/patch_clock_date_cn: " .. reason)
+        return false, reason
     end
 
     local err = hotfix(_localDateCN, ClockMod.build, "build -> _localDate")
     if err then
         logger.warn("simpleui_ext/patch_clock_date_cn: failed to apply hotfix: " .. err)
-        return
-    end
-
-    local _build = ClockMod.build
-    ---@diagnostic disable-next-line: duplicate-set-field
-    ClockMod.build = function(...)
-        logger.warn "simpleui_ext/patch_clock_date_cn: hooked build"
-        return _build(...)
+        return false, err
     end
 
     logger.info "simpleui_ext/patch_clock_date_cn: applied patch"
+    return true
 end
 
 return P

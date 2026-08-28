@@ -190,6 +190,13 @@ function P.apply()
         return
     end
 
+    -- Wallpaper helpers lived on sui_homescreen in 2.1.1 and moved to the
+    -- dedicated features/sui_wallpaper module in 2.5+. Resolve that split
+    -- once here instead of assuming the legacy methods still exist on the
+    -- Homescreen facade.
+    local ok_wp, Wallpaper = SimpleUICompat.tryRequire("wallpaper")
+    if not ok_wp or not Wallpaper then Wallpaper = Homescreen end
+
     local PAGE_BREAK_ID = Homescreen.PAGE_BREAK_ID  -- "__page_break__"
 
     -- Layout constants — prefer sui_core values, fall back to Device-scaled.
@@ -198,7 +205,7 @@ function P.apply()
     local MOD_GAP  = (ok_ui and UI and UI.MOD_GAP)  or Screen:scaleBySize(8)
 
     -- ── 3. Helper: build minimal context for module.build() calls ─────────
-    local function _buildSleepCtx()
+    local function _buildSleepCtx(inner_w)
         -- Re-acquire modules that SimpleUI's onTeardown() may have evicted from
         -- package.loaded during a context switch (FM<->Reader).  The new plugin
         -- instance re-requires them before any sleep can occur, so
@@ -248,15 +255,28 @@ function P.apply()
         local show_r = (mod_r  and live_Registry.isEnabled(mod_r,  PFX))
                     or (mod_cd and live_Registry.isEnabled(mod_cd, PFX))
 
+        local landscape_factor = (ok_ui and UI and type(UI.isLandscape) == "function"
+            and UI.isLandscape() and type(UI.getLandscapeFactor) == "function")
+            and UI.getLandscapeFactor() or 1
+
         return {
+            year_str     = os.date("%Y"),
+            inner_w      = inner_w,
+            col_w        = inner_w,
+            landscape_factor = landscape_factor,
             pfx          = PFX,
-            pfx_qa       = "simpleui_qa_",
+            pfx_qa       = PFX .. "qa_",
             close_fn     = function() end,
             open_fn      = function() end,
+            hold_fn      = function() end,
+            refresh_fn   = function() end,
+            open_settings_fn = function() end,
             on_qa_tap    = function() end,
             on_goal_tap  = function() end,
             db_conn      = db_conn,
+            db_conn_fatal = false,
             stats        = stats_data,
+            status_counts = nil,
             vspan_pool   = {},
             prefetched   = bs.prefetched_data,
             current_fp   = bs.current_fp,
@@ -295,9 +315,13 @@ function P.apply()
 
         -- Use the freshest sui_homescreen reference available (the new plugin
         -- instance re-requires it after every context switch).
-        local live_HS = SimpleUICompat.loaded("homescreen") or Homescreen
-        if not live_HS.styleGetWallpaperEnabled() then return nil end
-        local path = live_HS.styleGetWallpaper()
+        local live_Wallpaper = SimpleUICompat.loaded("wallpaper") or Wallpaper
+        if type(live_Wallpaper.styleGetWallpaperEnabled) ~= "function"
+                or type(live_Wallpaper.styleGetWallpaper) ~= "function"
+                or not live_Wallpaper.styleGetWallpaperEnabled() then
+            return nil
+        end
+        local path = live_Wallpaper.styleGetWallpaper()
         if not path then return nil end
         local ok, w = pcall(ImageWidget.new, ImageWidget, {
             file          = path,
@@ -403,11 +427,11 @@ function P.apply()
         -- whether to render transparent text areas.
         local wp_widget  = _getBgWidget(screen_w, screen_h)
         local has_wp     = (wp_widget ~= nil)
+        local inner_w    = screen_w - SIDE_PAD * 2
 
         -- Build data context.
-        local ctx, db_conn = _buildSleepCtx()
+        local ctx, db_conn = _buildSleepCtx(inner_w)
         ctx.has_wallpaper  = has_wp   -- override the default false
-        local inner_w = screen_w - SIDE_PAD * 2
 
         -- Render module widgets.
         local body  = VerticalGroup:new{ align = "left" }
@@ -527,45 +551,10 @@ function P.apply()
         return content
     end
 
-    -- ── 5. Patch Screensaver.show() via require() interception ───────────
-    -- package.loaded["ui/screensaver"] may already be set but in a partial
-    -- state (show = table not function) due to Lua's circular-require guard.
-    -- We wrap _G.require once; the FIRST successful call to
-    -- require("ui/screensaver") that returns a table with a function `show`
-    -- is our opportunity to patch it.  After that we restore the original
-    -- require immediately.
-    local _show_patched  = false
-    local _our_show_fn   = nil   -- reference to the exact function we installed
-    local _orig_require_for_ss = _G.require
-
-    local function _patchScreensaverShow(Screensaver)
-        if _show_patched then return true end
-        if type(Screensaver) ~= "table" then
-            logger.warn("screensaver_homescreen: _patchScreensaverShow: not a table")
-            return false
-        end
-        -- `show` may be a plain function OR a callable table (e.g. a KOReader
-        -- event-dispatch table with a __call metamethod).  Both are valid; we
-        -- store orig_show and replace the key with our own function.
-        -- Calling orig_show(self) works for both cases.
-        local orig_show      = Screensaver.show
-        local orig_show_type = type(orig_show)
-        if orig_show_type ~= "function" then
-            local mt = type(orig_show) == "table" and getmetatable(orig_show)
-            if not (mt and mt.__call) then
-                -- Not callable at all — do not patch, as orig_show(self) would crash.
-                logger.warn("screensaver_homescreen: Screensaver.show is not callable (type="
-                            .. orig_show_type .. ") — cannot patch")
-                return false
-            end
-            logger.info("screensaver_homescreen: Screensaver.show is callable table — patching")
-        end
-        _show_patched = true
-
-        Screensaver.show = function(self)
-            if self.screensaver_type ~= TYPE_VALUE then
-                return orig_show(self)
-            end
+    -- ── 5. Register this type with the shared Screensaver dispatcher ─────
+    -- Both bundled screensaver patches use one show/require/dofile hook. This
+    -- avoids nested global wrappers and preserves any hook installed earlier.
+    local function _showHomescreen(self, fallback_show)
             if not self.ui then
                 logger.warn("screensaver_homescreen: show() aborting — self.ui is nil (setup() may have failed)")
                 return
@@ -686,7 +675,7 @@ function P.apply()
                            .. " — resetting screen_saver_mode to prevent permanent lock")
                 Device.screen_saver_mode = false
                 Device.orig_rotation_mode = nil
-                return orig_show(self)
+                return fallback_show(self)
             end
             self.screensaver_widget          = sw_or_err
             self.screensaver_widget.modal    = true
@@ -698,7 +687,7 @@ function P.apply()
                            .. " — resetting screen_saver_mode")
                 Device.screen_saver_mode = false
                 Device.orig_rotation_mode = nil
-                return orig_show(self)
+                return fallback_show(self)
             end
 
             if with_gesture_lock then
@@ -709,81 +698,16 @@ function P.apply()
                 }
                 UIManager:show(self.screensaver_lock_widget)
             end
-        end
-
-        _our_show_fn = Screensaver.show
-
-        -- Patch setup() once to self-heal show() immediately before every sleep.
-        if not Screensaver._hs_setup_patched then
-            Screensaver._hs_setup_patched = true
-            local orig_setup = Screensaver.setup
-            Screensaver.setup = function(self_ss, event, event_message)
-                if _our_show_fn and Screensaver.show ~= _our_show_fn then
-                    _show_patched = false
-                    _patchScreensaverShow(Screensaver)
-                end
-                return orig_setup(self_ss, event, event_message)
-            end
-        end
-
-        return true
     end
 
-    local _cached = package.loaded["ui/screensaver"]
-    if type(_cached) == "table" and _cached.show ~= nil then
-        _patchScreensaverShow(_cached)
-    end
-
-    -- If not patched yet, wrap _G.require to catch the first successful load.
-    if not _show_patched then
-        _G.require = function(modname, ...)
-            local result = _orig_require_for_ss(modname, ...)
-            if modname == "ui/screensaver" then
-                if not _show_patched then
-                    if type(result) == "table" then
-                        if _patchScreensaverShow(result) then
-                            -- Restore immediately — no further interception needed.
-                            _G.require = _orig_require_for_ss
-                        else
-                            logger.warn("screensaver_homescreen: require(ui/screensaver) patch failed: "
-                                        .. "show=" .. type(result.show)
-                                        .. " setup=" .. type(result.setup))
-                        end
-                    else
-                        logger.warn("screensaver_homescreen: require(ui/screensaver) returned non-table: "
-                                    .. type(result))
-                    end
-                else
-                    -- Already patched by another code path; restore.
-                    _G.require = _orig_require_for_ss
-                end
-            end
-            return result
-        end
-    end
-
-    -- Wrap dofile() for screensaver_menu injection
-    local _orig_dofile = _G.dofile
-    _G.dofile = function(path, ...)
-        local result = _orig_dofile(path, ...)
-        if type(path) == "string" and path:find("screensaver_menu%.lua$") then
-            _injectIntoMenuTable(result)
-            local ss = package.loaded["ui/screensaver"]
-            if ss then
-                if _our_show_fn and ss.show ~= _our_show_fn then
-                    _show_patched = false
-                    _patchScreensaverShow(ss)
-                elseif not _show_patched then
-                    if not _patchScreensaverShow(ss) then
-                        logger.warn("screensaver_homescreen: show() not patched after dofile; type="
-                                    .. type(ss.show))
-                    end
-                    _G.require = _orig_require_for_ss
-                end
-            end
-        end
-        return result
-    end
+    local Dispatcher = require("utils/screensaver_dispatcher")
+    local ok_register, register_error = Dispatcher.register{
+        id               = P.id,
+        screensaver_type = TYPE_VALUE,
+        show             = _showHomescreen,
+        inject_menu      = _injectIntoMenuTable,
+    }
+    if not ok_register then error(register_error) end
 end
 
 return P

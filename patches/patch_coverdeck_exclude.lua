@@ -70,6 +70,12 @@ local function _isExcluded(fp, excludes)
     return false
 end
 
+local function _isFile(lfs, fp)
+    if not lfs then return true end
+    local ok, mode = pcall(lfs.attributes, fp, "mode")
+    return ok and mode == "file"
+end
+
 -- ---------------------------------------------------------------------------
 -- apply()
 -- ---------------------------------------------------------------------------
@@ -135,7 +141,7 @@ function P.apply()
                         local filled = {}
                         for _i, e in ipairs(RH.hist) do
                             if e and e.file
-                                and (not ok_lfs or lfs.attributes(e.file, "mode") == "file")
+                                and _isFile(ok_lfs and lfs or nil, e.file)
                                 and not _isExcluded(e.file, excludes)
                             then
                                 filled[#filled + 1] = e.file
@@ -148,7 +154,7 @@ function P.apply()
                     -- ReadHistory unavailable — fall back to simple filter.
                     local filtered = {}
                     for _i, fp in ipairs(orig_recent_fps or {}) do
-                        if (not ok_lfs or lfs.attributes(fp, "mode") == "file")
+                        if _isFile(ok_lfs and lfs or nil, fp)
                             and not _isExcluded(fp, excludes)
                         then
                             filtered[#filtered + 1] = fp

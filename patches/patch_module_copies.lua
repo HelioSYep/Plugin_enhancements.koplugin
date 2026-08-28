@@ -5,7 +5,7 @@ local SimpleUICompat = require("utils/simpleui_compat")
 local patch = {
     id = "module_copies",
     name = "模块副本功能",
-    description = _("Adds 'Number of Copies' setting to all SimpleUI modules, allowing the same module to be placed on multiple pages."),
+    description = _("Adds 'Number of Copies' to singleton SimpleUI modules. Native dynamic rows keep using SimpleUI's independent-instance system."),
     default_enabled = false  -- Opt-in: patches default to disabled
 }
 
@@ -27,7 +27,44 @@ function patch.apply()
     local original_get = Registry.get
     local wrapped_cache = {}
 
+    -- SimpleUI 2.5+ materialises instanciable bases (Quick Actions Row,
+    -- Spacer, Featured Collection, and future rows) as ids in the form
+    -- "<base_id>_<instance_suffix>". Copying one of those descriptors again
+    -- would create "<instance_id>#2", which shares the original settings and
+    -- is invisible to Registry's orphan-instance tracker. If the original is
+    -- removed while #2 remains, SimpleUI prunes the real instance on restart
+    -- and the synthetic copy disappears. Discover the base through the public
+    -- Registry.getBase API instead of hard-coding today's three module ids.
+    local native_instance_cache = {}
+    local function _isNativeInstanceId(id)
+        if type(id) ~= "string" or type(Registry.getBase) ~= "function" then
+            return false
+        end
+        if native_instance_cache[id] ~= nil then
+            return native_instance_cache[id]
+        end
+
+        local from = 1
+        while true do
+            local separator = id:find("_", from, true)
+            if not separator then break end
+            local candidate = id:sub(1, separator - 1)
+            local ok_base, base = pcall(Registry.getBase, candidate)
+            if ok_base and type(base) == "table" and base.instanciable == true then
+                native_instance_cache[id] = true
+                return true
+            end
+            from = separator + 1
+        end
+
+        native_instance_cache[id] = false
+        return false
+    end
+
     Registry.get = function(id)
+        if type(id) ~= "string" then
+            return original_get(id)
+        end
         if wrapped_cache[id] then
             return wrapped_cache[id]
         end
@@ -39,6 +76,12 @@ function patch.apply()
 
         local base_id = id:match("^(.+)#%d+$")
         local mod = original_get(base_id)
+
+        -- Reject legacy synthetic copies of native instances. Leaving them
+        -- resolvable would recreate the orphan-pruning failure fixed above.
+        if mod and _isNativeInstanceId(base_id) then
+            return nil
+        end
 
         if mod then
             local wrapped_mod = {}
@@ -117,7 +160,7 @@ function patch.apply()
         local mods = original_list()
 
         for _mi, mod in ipairs(mods or {}) do
-            if not mod._module_copies_enhanced then
+            if not _isNativeInstanceId(mod.id) and not mod._module_copies_enhanced then
                 local original_getMenuItems = mod.getMenuItems
 
                 local function enhanceModuleMenuItems(ctx_menu)
@@ -255,13 +298,11 @@ function patch.apply()
                                         end
                                     end
 
-                                    local ok_hs, HS_module = SimpleUICompat.tryRequire("homescreen")
-                                    if ok_hs and HS_module and HS_module._instance then
-                                        HS_module._instance._enabled_mods_cache = nil
-                                    end
-                                    if ok_hs and HS_module and type(HS_module.rebuildAllLayouts) == "function" then
-                                        pcall(HS_module.rebuildAllLayouts)
-                                    end
+                                    -- Rebuild every live Custom Screen on
+                                    -- 2.5+/2.6, or the single Homescreen on
+                                    -- 2.1.1. This also clears the engine's
+                                    -- per-screen enabled-module caches.
+                                    SimpleUICompat.rebuildAllLayouts()
 
                                     if ctx_menu and ctx_menu.refresh then
                                         ctx_menu.refresh()
@@ -335,7 +376,7 @@ function patch.apply()
             result[#result + 1] = m
         end
         for _i, m in ipairs(mods or {}) do
-            if not m.id:find("#", 1, true) then
+            if not m.id:find("#", 1, true) and not _isNativeInstanceId(m.id) then
                 local copies = _getCopyCount(m.id, "simpleui_hs_")
                 for ci = 2, copies do
                     local copy_mod = Registry.get(m.id .. "#" .. ci)

@@ -553,8 +553,8 @@ local function _buildWidget(w, ctx, pfx, SH, bd, cover, stats, D, scale, lbl_sca
 
     local SS = getSUIStyle()
     if SS then
-        _CLR_DARK_EFF = SS.getThemeColor("fg") or _CLR_DARK_EFF
-        CLR_TEXT_SUB_EFF = SS.getThemeColor("text_secondary") or _CLR_DARK_EFF
+        _CLR_DARK_EFF = SimpleUICompat.getThemeColor(SS, "fg") or _CLR_DARK_EFF
+        CLR_TEXT_SUB_EFF = SimpleUICompat.getThemeColor(SS, "text_secondary") or _CLR_DARK_EFF
     end
 
     local val_fg_color = _CLR_DARK_EFF
@@ -624,7 +624,8 @@ local function _buildWidget(w, ctx, pfx, SH, bd, cover, stats, D, scale, lbl_sca
     elseif hdr_weight == "medium" then sec_fs = Font:getFace("NotoSans-Regular.ttf", hdr_base_fs)
     else sec_fs = Font:getFace("NotoSans-Bold.ttf", hdr_base_fs) end
 
-    local CLR_HDR_BG = SS and (SS.getThemeColor("muted") or SS.getThemeColor("divider")) or Blitbuffer.COLOR_GRAY_D
+    local CLR_HDR_BG = SS and (SimpleUICompat.getThemeColor(SS, "muted")
+        or SimpleUICompat.getThemeColor(SS, "divider")) or Blitbuffer.COLOR_GRAY_D
     
     local function mkDynamicGrid(items)
         local grid_args = { align = "left" }
